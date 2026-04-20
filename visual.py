@@ -50,12 +50,6 @@ def _get_detector() -> DetectorProtocol:
     mode = os.environ.get("VISUAL_DETECTOR", "").strip().lower()
 
     # Explizite Auswahl per Umgebungsvariable
-    if mode == "mock":
-        from mock_detector import MockDetector
-        _detector = MockDetector(found_objects={"smartphone", "cell phone"})
-        print("[visual] MockDetector aktiv (VISUAL_DETECTOR=mock)")
-        return _detector
-
     if mode == "yolo":
         from yolo_detector import YoloDetector
         _detector = YoloDetector()
@@ -78,15 +72,9 @@ def _get_detector() -> DetectorProtocol:
         _detector = HailoDetector()
         print("[visual] HailoDetector aktiv (auto)")
     except ImportError:
-        try:
             from yolo_detector import YoloDetector
             _detector = YoloDetector()
-            print("[visual] YoloDetector aktiv (auto-fallback: kein Hailo)")
-        except ImportError:
-            from mock_detector import MockDetector
-            _detector = MockDetector(found_objects={"smartphone", "cell phone"})
-            print("[visual] MockDetector aktiv (auto-fallback: kein Hailo, kein YOLO)")
-
+            print("[visual] YoloDetector aktiv (auto-fallback: kein Hailo)")      
     return _detector
 
 
