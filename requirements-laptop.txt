@@ -1,0 +1,3 @@
+# Laptop-Entwicklung (kein Hailo). Install: pip install -r requirements-laptop.txt
+opencv-python>=4.8.0
+ultralytics>=8.0.0
