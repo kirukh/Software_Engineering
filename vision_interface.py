@@ -1,6 +1,4 @@
-"""
-Shared types and detector protocol for Team Visual (Sprint 1).
-"""
+"""Gemeinsame Typen und Detector-Protokoll für Team Visual."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -27,5 +25,4 @@ class VisionResult:
 
 @runtime_checkable
 class DetectorProtocol(Protocol):
-    def detect(self, object_name: str) -> VisionResult:
-        ...
+    def detect(self, object_name: str) -> VisionResult: ...

@@ -1,39 +1,61 @@
-# Visual Team - README
+# Visual Team — README
 
-## Übersicht
-Das Visual-Team ist verantwortlich für Objekterkennung mittels Kameraeingabe und KI-gestützter Bildanalyse.
+Objekterkennung über Kamera + KI auf dem Raspberry Pi 5 + Hailo-8.
+Wird vom Controller per direktem Funktionsaufruf im selben Prozess genutzt.
 
-## Team-Aufgaben
+## Schnittstelle
 
-- **Eingabe**: Objektspezifikation vom Audio-Team über Controller empfangen
-- **Bilderfassung**: Bilder von der Kamera-Hardware erfassen
-- **Objekterkennung**: KI-gestützte Analyse durchführen, um Zielobjekte zu identifizieren
-- **Ausgabe**: Tuple mit Erkennungsstatus und Konfidenz an Controller zurückgeben
+**Datei:** `visual.py`
 
-## Workflow
+**Synchron** (einfach, blockierend):
+```python
+from visual import search
 
-**Methode**: `search()` in `visual.py`
+search({"name": "smartphone"})
+# → {"name": "smartphone", "found": True, "confidence": 0.92, "x": 0.51, "y": 0.48}
+```
 
-**Prozess**:
-1. Controller empfängt Eingabe vom Audio-Team
-2. Controller ruft `search()`-Funktion mit Objektparameter auf
-3. Visual-Team startet Kamerasuche
-4. Bilder mittels AI-Detection-Modul analysieren
-5. Dictionary erstellen mit Objektname, gefunden und Konfidenz
-6. Dictionary mit Objektname, nicht gefunden und Konfidenz wenn nicht gefunden
+**Asynchron** (Hauptpfad für den Controller, mit Cancel-Möglichkeit):
+```python
+from visual import start_search, get_result, cancel
 
-## Funktionale Anforderungen
+job = start_search({"name": "smartphone"})  # → {"job_id": "...", "status": "running"}
+get_result(job["job_id"])                   # → {"status": "running"} oder Ergebnis-Dict
+cancel(job["job_id"])                       # bricht laufende Suche ab
+```
+
+## Detector-Auswahl
+
+Per Umgebungsvariable `VISUAL_DETECTOR`:
+
+| Wert | Verhalten |
+|------|-----------|
+| `hailo` | HailoDetector (Pi 5 + Hailo-8) |
+| `yolo` | YoloDetector (Webcam + YOLOv8, ohne Hailo testbar) |
+| *(nicht gesetzt)* | Auto: Hailo wenn verfügbar, sonst YOLO |
+
+Weitere Tuning-Variablen: `VISION_STABLE_FRAMES`, `VISION_CONFIDENCE_MIN`, `VISION_TIMEOUT`, `VISION_CAMERA_INDEX`, `VISION_MODEL_PATH`.
+
+## Architektur-Entscheidung: kein REST
+
+Beide Module (Controller + Visual) laufen fest verbaut im selben Prozess auf dem
+Pi. Ein direkter Funktionsaufruf ist einfacher zu debuggen, schneller und
+vermeidet unnötigen Netzwerk-Layer.
+
+## Tests
+
+```bash
+python test_visual.py           # Fake-Tests, ohne Hardware
+python test_visual.py --live    # zusätzlich: echte Webcam, echtes Smartphone
+```
+
+## Anforderungen
 
 | ID | Anforderung |
 |---|---|
-| FR-01 | Objektsuchanfragen als Eingabeparameter vom Controller akzeptieren |
+| FR-01 | Suchanfragen als Dict vom Controller akzeptieren |
 | FR-02 | Bilder von der Kamera-Hardware erfassen |
-| FR-03 | KI-gestützte Bildanalyse zur Objektidentifikation durchführen |
-| FR-04 | Dictionary mit Objektname, Erkennungsstatus (true/false) und Konfidenzwert zurückgeben |
-
-## Cross-Team-Integration
-
-| ID | Anforderung |
-|---|---|
-| ITF-01 | Objektsuchanfragen vom Audio-Team über Controller empfangen |
-| ITF-02 | Erkennungsergebnis-Dict (name, boolean, confidence) an Controller zurückgeben |
+| FR-03 | KI-gestützte Bildanalyse durchführen |
+| FR-04 | Dict mit `name`, `found`, `confidence`, `x`, `y` zurückgeben |
+| ITF-01 | Suchanfragen vom Controller per Funktionsaufruf empfangen |
+| ITF-02 | Ergebnis-Dict an Controller zurückgeben |

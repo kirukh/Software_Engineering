@@ -1,3 +1,2 @@
-flask>=3.0.0    # neu
 opencv-python>=4.8.0
 ultralytics>=8.0.0
