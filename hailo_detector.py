@@ -22,6 +22,7 @@ try:
 except ImportError:
     pass
 
+_PHONE_LABELS = frozenset({"cell phone", "smartphone"})
 
 STABLE_FRAMES_REQUIRED = int(os.environ.get("VISION_STABLE_FRAMES", "12"))
 CONFIDENCE_MIN = float(os.environ.get("VISION_CONFIDENCE_MIN", "0.5"))
@@ -77,7 +78,7 @@ def _make_callback(state: _DetectionState):
 
         for det in roi.get_objects_typed(hailo.HAILO_DETECTION):
             label = (det.get_label() or "").strip().lower()
-            if label != state.target_label:
+            if label not in _PHONE_LABELS and label != state.target_label:
                 continue
             conf = float(det.get_confidence())
             if conf >= CONFIDENCE_MIN and conf > best_conf:

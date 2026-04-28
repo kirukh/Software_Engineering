@@ -15,6 +15,27 @@ CAMERA_INDEX = int(os.environ.get("VISION_CAMERA_INDEX", "0"))
 MODEL_PATH = os.environ.get("VISION_MODEL_PATH", "yolov8n.pt")
 TIMEOUT_SECONDS = float(os.environ.get("VISION_TIMEOUT", "30"))
 
+# Mapping: User-Begriff (DE/EN, Umgangssprache) → COCO-Label(s) von YOLOv8.
+_LABEL_ALIASES: dict[str, frozenset[str]] = {
+    "smartphone": frozenset({"cell phone"}),
+    "handy":      frozenset({"cell phone"}),
+    "phone":      frozenset({"cell phone"}),
+    "cell phone": frozenset({"cell phone"}),
+    "laptop":     frozenset({"laptop"}),
+    "person":     frozenset({"person"}),
+    "bottle":     frozenset({"bottle"}),
+    "cup":        frozenset({"cup"}),
+    "chair":      frozenset({"chair"}),
+    "book":       frozenset({"book"}),
+    "keyboard":   frozenset({"keyboard"}),
+    "mouse":      frozenset({"mouse"}),
+    "tv":         frozenset({"tv"}),
+    "backpack":   frozenset({"backpack"}),
+}
+
+
+def _resolve_labels(object_name: str) -> frozenset[str]:
+    return _LABEL_ALIASES.get(object_name.lower(), frozenset({object_name.lower()}))
 
 
 class YoloDetector:
@@ -29,7 +50,7 @@ class YoloDetector:
 
     def detect(self, object_name: str) -> VisionResult:
         model = self._model_lazy()
-        target_labels = frozenset({object_name.strip().lower()})
+        target_labels = _resolve_labels(object_name)
         names: dict[int, str] = model.names
 
         cap = cv2.VideoCapture(CAMERA_INDEX)
