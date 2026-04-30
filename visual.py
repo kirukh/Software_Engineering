@@ -1,16 +1,15 @@
 """
-visual.py — Schnittstelle des Visual-Moduls.
+visual.py — Tracking-API des Visual-Moduls.
 
-Der Controller ruft uns direkt im Prozess auf (kein HTTP). Wir bieten:
-    search(request)          # blockierend, einfacher Convenience-Pfad
-    start_search(request)    # startet Suche im Hintergrund, gibt job_id
-    get_result(job_id)       # pollt Status / Ergebnis
-    cancel(job_id)           # bricht laufende Suche ab
+Logik-Schicht zwischen HTTP (server.py) und Detector:
+    start_tracking(name)   # Detector im Hintergrund starten
+    get_latest()           # aktuelles aggregiertes Window-Ergebnis
+    stop_tracking()        # Detector sauber beenden
+    prewarm()              # Modell vorladen (vom Server beim Start)
 
-Dict-Format:
-    rein  → {"name": "smartphone"}
-    raus  → {"name": str, "found": bool, "confidence": float,
-             "x": float|None, "y": float|None}
+Aggregation: Sliding Window über die letzten N Roh-Frames vom Detector
+(Default 8). Mind. M Treffer (Default 5) im Fenster → found=True mit
+Mittelwerten. Sonst found=False.
 
 Detector-Wahl per VISUAL_DETECTOR=hailo|yolo (sonst Auto: Hailo > YOLO).
 """
@@ -18,17 +17,30 @@ from __future__ import annotations
 
 import os
 import threading
-import time
-import uuid
+from collections import deque
 
 from vision_interface import DetectorProtocol, VisionResult
 
+# ------------------------------------------------------------------ Config
+
+WINDOW_SIZE = int(os.environ.get("VISION_WINDOW_SIZE", "8"))
+MIN_HITS_IN_WINDOW = int(os.environ.get("VISION_MIN_HITS_IN_WINDOW", "5"))
+
+
+# ------------------------------------------------------------------ State
+
 _detector: DetectorProtocol | None = None
-_jobs: dict[str, dict] = {}
-_jobs_lock = threading.Lock()
+
+_tracking_lock = threading.Lock()
+_tracking_thread: threading.Thread | None = None
+_stop_event: threading.Event | None = None
+_current_name: str | None = None
+
+_window_lock = threading.Lock()
+_window: deque[VisionResult] = deque(maxlen=WINDOW_SIZE)
 
 
-# ------------------------------------------------------------------ Detector
+# ------------------------------------------------------------------ Detector-Wahl
 
 def _get_detector() -> DetectorProtocol:
     global _detector
@@ -66,72 +78,122 @@ def set_detector(detector: DetectorProtocol | None) -> None:
     _detector = detector
 
 
-# ------------------------------------------------------------------ Hilfsfunktionen
-
-def _extract_name(request: dict) -> str:
-    if not isinstance(request, dict):
-        raise ValueError(f"request muss ein dict sein, bekam: {type(request).__name__}")
-    name = request.get("name")
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError(f"request['name'] muss ein nicht-leerer String sein, bekam: {name!r}")
-    return name.strip()
+def prewarm() -> None:
+    """Detector initialisieren und Modell vorladen. Vom Server beim Start aufgerufen."""
+    detector = _get_detector()
+    if hasattr(detector, "prewarm"):
+        detector.prewarm()
 
 
-# ------------------------------------------------------------------ Sync-API
+# ------------------------------------------------------------------ Aggregation
 
-def search(request: dict) -> dict:
-    """Blockierende Suche — einfacher Pfad für Tests und einfache Aufrufer."""
-    name = _extract_name(request)
-    return _get_detector().detect(name).to_dict()
-
-
-# ------------------------------------------------------------------ Async-API
-# Hauptpfad für den Controller: Suche im Hintergrund-Thread, abbrechbar.
-
-def start_search(request: dict) -> dict:
-    name = _extract_name(request)
-    job_id = str(uuid.uuid4())
-    with _jobs_lock:
-        _jobs[job_id] = {"status": "running", "result": None}
-    threading.Thread(target=_run_job, args=(job_id, name), daemon=True).start()
-    return {"job_id": job_id, "status": "running"}
+def _on_frame(frame: VisionResult) -> None:
+    with _window_lock:
+        _window.append(frame)
 
 
-def get_result(job_id: str) -> dict:
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    if job is None:
-        return {"status": "unknown", "error": "job_id nicht gefunden"}
-    if job["status"] == "running":
-        return {"status": "running"}
-    if job["status"] == "done":
-        return {"status": "done", **job["result"]}
-    # cancelled oder error
-    return {"status": job["status"], **({"message": job["result"]} if job["status"] == "error" else {})}
+def _aggregate() -> dict:
+    """Window → Dict. Mittelwerte über Treffer-Frames, sonst found=False."""
+    with _window_lock:
+        snapshot = list(_window)
+        name = _current_name or ""
+
+    hits = [f for f in snapshot if f.found]
+    if len(hits) < MIN_HITS_IN_WINDOW:
+        return _empty_result(name)
+
+    n = len(hits)
+    return {
+        "name": name,
+        "found": True,
+        "confidence": round(sum(f.confidence for f in hits) / n, 4),
+        "x": round(sum(f.x for f in hits) / n, 4),
+        "y": round(sum(f.y for f in hits) / n, 4),
+        "w": round(sum(f.w for f in hits) / n, 4),
+        "h": round(sum(f.h for f in hits) / n, 4),
+    }
 
 
-def cancel(job_id: str) -> dict:
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-        if job is None:
-            return {"status": "unknown", "error": "job_id nicht gefunden"}
-        if job["status"] == "running":
-            job["status"] = "cancelled"
-    return {"status": "cancelled", "job_id": job_id}
+def _empty_result(name: str) -> dict:
+    return {
+        "name": name,
+        "found": False,
+        "confidence": 0.0,
+        "x": None, "y": None, "w": None, "h": None,
+    }
 
 
-def _run_job(job_id: str, name: str) -> None:
-    """Worker-Thread: nutzt sync search() intern, schreibt Ergebnis in _jobs."""
+# ------------------------------------------------------------------ Tracking-API
+
+def start_tracking(name: str) -> dict:
+    """Startet den Detector im Hintergrund. Idempotent: laufendes Tracking
+    wird vorher gestoppt, falls der Name sich ändert.
+
+    Validation passiert im Server (Pydantic). Hier nur defensives strip().
+    """
+    global _tracking_thread, _stop_event, _current_name
+    name = name.strip()
+
+    with _tracking_lock:
+        if _tracking_thread is not None and _tracking_thread.is_alive():
+            if _current_name == name:
+                return {"status": "running", "name": name}
+            _stop_locked()
+
+        with _window_lock:
+            _window.clear()
+
+        _current_name = name
+        _stop_event = threading.Event()
+        detector = _get_detector()
+        _tracking_thread = threading.Thread(
+            target=_run_stream,
+            args=(detector, name, _stop_event),
+            daemon=True,
+        )
+        _tracking_thread.start()
+
+    return {"status": "running", "name": name}
+
+
+def _run_stream(detector: DetectorProtocol, name: str, stop_event: threading.Event) -> None:
+    """Worker: ruft detector.stream() bis stop_event gesetzt wird."""
     try:
-        result = search({"name": name})
-        with _jobs_lock:
-            job = _jobs.get(job_id)
-            # Cancel zwischenzeitlich? Dann Ergebnis verwerfen.
-            if job and job["status"] == "running":
-                job["status"] = "done"
-                job["result"] = result
+        detector.stream(name, _on_frame, stop_event)
     except Exception as e:
-        with _jobs_lock:
-            if job_id in _jobs:
-                _jobs[job_id]["status"] = "error"
-                _jobs[job_id]["result"] = str(e)
+        print(f"[visual] Stream-Fehler: {e}")
+        with _window_lock:
+            _window.clear()
+
+
+def get_latest() -> dict:
+    """Aktuelles aggregiertes Window-Ergebnis. status='idle' wenn nichts läuft."""
+    with _tracking_lock:
+        running = _tracking_thread is not None and _tracking_thread.is_alive()
+
+    if not running:
+        return {"status": "idle"}
+
+    return {"status": "running", **_aggregate()}
+
+
+def stop_tracking() -> dict:
+    """Stoppt den laufenden Detector. Idempotent."""
+    with _tracking_lock:
+        was_running = _tracking_thread is not None and _tracking_thread.is_alive()
+        _stop_locked()
+    return {"status": "stopped", "was_running": was_running}
+
+
+def _stop_locked() -> None:
+    """Muss unter _tracking_lock aufgerufen werden."""
+    global _tracking_thread, _stop_event, _current_name
+    if _stop_event is not None:
+        _stop_event.set()
+    if _tracking_thread is not None:
+        _tracking_thread.join(timeout=2.0)
+    _tracking_thread = None
+    _stop_event = None
+    _current_name = None
+    with _window_lock:
+        _window.clear()

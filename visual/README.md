@@ -1,61 +1,142 @@
 # Visual Team — README
 
 Objekterkennung über Kamera + KI auf dem Raspberry Pi 5 + Hailo-8.
-Wird vom Controller per direktem Funktionsaufruf im selben Prozess genutzt.
+Stellt dem Controller eine HTTP-API bereit, die kontinuierlich Tracking-Ergebnisse
+liefert ("Dauerfeuer"). Controller pollt das aktuelle aggregierte Ergebnis.
 
-## Schnittstelle
+## Architektur
 
-**Datei:** `visual.py`
-
-**Synchron** (einfach, blockierend):
-```python
-from visual import search
-
-search({"name": "smartphone"})
-# → {"name": "smartphone", "found": True, "confidence": 0.92, "x": 0.51, "y": 0.48}
+```
+                        ┌──────────────────────────────────┐
+  Controller            │  Visual-Server (FastAPI)         │
+  ─────────             │  ────────────────────            │
+  POST /track/start ───▶│  visual.start_tracking()         │
+  GET  /track/latest ──▶│  visual.get_latest()             │
+  POST /track/stop  ───▶│  visual.stop_tracking()          │
+                        │                                  │
+                        │  Hintergrund-Thread:             │
+                        │  Detector.stream() → on_frame ───┼──▶ Sliding Window
+                        │                                  │    (8 Frames)
+                        └──────────────────────────────────┘
 ```
 
-**Asynchron** (Hauptpfad für den Controller, mit Cancel-Möglichkeit):
-```python
-from visual import start_search, get_result, cancel
+Detector liefert pro Frame ein Roh-Ergebnis. `visual.py` hält ein **Sliding
+Window** der letzten N Frames (Default 8) und aggregiert beim Polling: bei
+mind. M Treffern (Default 5) → `found=True` mit Mittelwerten von
+`confidence`, `x`, `y`, `w`, `h`. Sonst `found=False` mit allen Koordinaten
+auf `null`.
 
-job = start_search({"name": "smartphone"})  # → {"job_id": "...", "status": "running"}
-get_result(job["job_id"])                   # → {"status": "running"} oder Ergebnis-Dict
-cancel(job["job_id"])                       # bricht laufende Suche ab
+## HTTP-API
+
+Server läuft per Default auf `127.0.0.1:8000`.
+
+### `POST /track/start`
+```json
+Request:  {"name": "cell phone"}
+Response: {"status": "running", "name": "cell phone"}
 ```
 
-## Detector-Auswahl
+### `GET /track/latest`
+```json
+// Tracking läuft, Objekt erkannt
+{"status": "running", "name": "cell phone", "found": true,
+ "confidence": 0.87, "x": 0.51, "y": 0.48, "w": 0.18, "h": 0.32}
 
-Per Umgebungsvariable `VISUAL_DETECTOR`:
+// Tracking läuft, Objekt nicht (mehr) erkannt
+{"status": "running", "name": "cell phone", "found": false,
+ "confidence": 0.0, "x": null, "y": null, "w": null, "h": null}
 
-| Wert | Verhalten |
-|------|-----------|
-| `hailo` | HailoDetector (Pi 5 + Hailo-8) |
-| `yolo` | YoloDetector (Webcam + YOLOv8, ohne Hailo testbar) |
-| *(nicht gesetzt)* | Auto: Hailo wenn verfügbar, sonst YOLO |
+// Kein Tracking aktiv
+{"status": "idle"}
+```
 
-Weitere Tuning-Variablen: `VISION_STABLE_FRAMES`, `VISION_CONFIDENCE_MIN`, `VISION_TIMEOUT`, `VISION_CAMERA_INDEX`, `VISION_MODEL_PATH`.
+### `POST /track/stop`
+```json
+Response: {"status": "stopped", "was_running": true}
+```
 
-## Architektur-Entscheidung: kein REST
+### `GET /health`
+```json
+Response: {"status": "ok"}
+```
 
-Beide Module (Controller + Visual) laufen fest verbaut im selben Prozess auf dem
-Pi. Ein direkter Funktionsaufruf ist einfacher zu debuggen, schneller und
-vermeidet unnötigen Netzwerk-Layer.
+## Server starten
+
+```bash
+# Auto-Detector (Hailo wenn verfügbar, sonst YOLO)
+python server.py
+
+# YOLO-Webcam erzwingen (Laptop ohne Hailo)
+VISUAL_DETECTOR=yolo python server.py
+```
+
+## Polling-Beispiel (Controller-Seite)
+
+```python
+from visual_client import VisualClient
+import time
+
+with VisualClient() as visual:
+    visual.start("cell phone")  # COCO-Label, vom Audio-Team geliefert
+    while controller_running:
+        r = visual.latest()
+        if r["status"] == "running" and r["found"]:
+            laser.point_to(r["x"], r["y"])
+        else:
+            laser.idle()
+        time.sleep(0.1)
+```
+
+> **Wichtig:** `name` muss ein gültiges COCO-Label sein (z.B. `"cell phone"`,
+> `"person"`, `"bottle"`), nicht ein Umgangs-Begriff wie `"smartphone"` oder
+> `"handy"`. Das Audio-Team mappt Sprache auf COCO-Labels, bevor es zum
+> Controller geht.
+
+## Konfiguration
+
+Alle Tuning-Parameter über Umgebungsvariablen:
+
+| Variable | Default | Bedeutung |
+|---|---|---|
+| `VISION_CONFIDENCE_MIN` | `0.5` | Mindest-Konfidenz pro Frame |
+| `VISION_WINDOW_SIZE` | `8` | Größe des Sliding Windows in Frames |
+| `VISION_MIN_HITS_IN_WINDOW` | `5` | Treffer-Mindestanzahl im Window für `found=True` |
+| `VISION_CAMERA_INDEX` | `0` | Webcam-Index (nur YOLO) |
+| `VISION_MODEL_PATH` | `yolov8n.pt` | YOLO-Modell-Pfad |
+| `VISUAL_HOST` | `127.0.0.1` | Server-Bind |
+| `VISUAL_PORT` | `8000` | Server-Port |
+| `VISUAL_DETECTOR` | *(auto)* | `hailo` oder `yolo` erzwingen |
+
+> Eine zentrale Config-Datei für alle Teams ist im Sprint 2 in Diskussion.
 
 ## Tests
 
 ```bash
-python test_visual.py           # Fake-Tests, ohne Hardware
-python test_visual.py --live    # zusätzlich: echte Webcam, echtes Smartphone
+python test_visual.py            # Fake-Tests, ohne Hardware
+python test_visual.py --server   # zusätzlich HTTP-Endpoints (mit Fake im Test)
+python live_e2e_test.py          # interaktiver Webcam-Test, Default smartphone 30s
 ```
+
+## Architektur-Entscheidung: HTTP-Server (Sprint 2)
+
+In Sprint 1 hatten wir uns gegen REST entschieden (einmaliger Aufruf, kein
+Netzwerk-Layer nötig). In Sprint 2 wurde die Anforderung geändert:
+**kontinuierliches Tracking** ("Dauerfeuer") für den Laserpointer.
+Optionen waren:
+
+- Eigener OS-Prozess + IPC (Pipe/Socket) — komplex, schwer zu debuggen
+- Server-Sent-Events — eine Sonderlocke ggü. den anderen Teams
+- **HTTP-Polling — gewählt:** einheitlich mit den anderen Teams, mit `curl`
+  trivial zu debuggen, FastAPI + Pydantic passt direkt zu unserem Code
 
 ## Anforderungen
 
 | ID | Anforderung |
 |---|---|
-| FR-01 | Suchanfragen als Dict vom Controller akzeptieren |
-| FR-02 | Bilder von der Kamera-Hardware erfassen |
-| FR-03 | KI-gestützte Bildanalyse durchführen |
-| FR-04 | Dict mit `name`, `found`, `confidence`, `x`, `y` zurückgeben |
-| ITF-01 | Suchanfragen vom Controller per Funktionsaufruf empfangen |
-| ITF-02 | Ergebnis-Dict an Controller zurückgeben |
+| FR-01 | Suchanfragen (Objektname) per HTTP vom Controller akzeptieren |
+| FR-02 | Bilder von der Kamera-Hardware kontinuierlich erfassen |
+| FR-03 | KI-gestützte Bildanalyse pro Frame durchführen |
+| FR-04 | Ergebnis mit `name`, `found`, `confidence`, `x`, `y`, `w`, `h` zurückgeben |
+| FR-05 | Sliding-Window-Aggregation über N Frames für stabile Ausgabe |
+| ITF-01 | HTTP-API: `POST /track/start`, `GET /track/latest`, `POST /track/stop` |
+| ITF-02 | JSON-Antworten, Pydantic-validiert |

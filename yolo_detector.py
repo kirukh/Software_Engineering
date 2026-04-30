@@ -2,40 +2,20 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 
 import cv2
 from ultralytics import YOLO
 
-from vision_interface import VisionResult
+from vision_interface import FrameCallback, VisionResult
 
-STABLE_FRAMES_REQUIRED = int(os.environ.get("VISION_STABLE_FRAMES", "8"))
 CONFIDENCE_MIN = float(os.environ.get("VISION_CONFIDENCE_MIN", "0.5"))
 CAMERA_INDEX = int(os.environ.get("VISION_CAMERA_INDEX", "0"))
 MODEL_PATH = os.environ.get("VISION_MODEL_PATH", "yolov8n.pt")
-TIMEOUT_SECONDS = float(os.environ.get("VISION_TIMEOUT", "30"))
 
-# Mapping: User-Begriff (DE/EN, Umgangssprache) → COCO-Label(s) von YOLOv8.
-_LABEL_ALIASES: dict[str, frozenset[str]] = {
-    "smartphone": frozenset({"cell phone"}),
-    "handy":      frozenset({"cell phone"}),
-    "phone":      frozenset({"cell phone"}),
-    "cell phone": frozenset({"cell phone"}),
-    "laptop":     frozenset({"laptop"}),
-    "person":     frozenset({"person"}),
-    "bottle":     frozenset({"bottle"}),
-    "cup":        frozenset({"cup"}),
-    "chair":      frozenset({"chair"}),
-    "book":       frozenset({"book"}),
-    "keyboard":   frozenset({"keyboard"}),
-    "mouse":      frozenset({"mouse"}),
-    "tv":         frozenset({"tv"}),
-    "backpack":   frozenset({"backpack"}),
-}
-
-
-def _resolve_labels(object_name: str) -> frozenset[str]:
-    return _LABEL_ALIASES.get(object_name.lower(), frozenset({object_name.lower()}))
+# Hinweis: Der Controller liefert immer bereits korrekte COCO-Labels
+# (Mapping passiert im Audio-Team). Daher kein Aliasing hier nötig.
 
 
 class YoloDetector:
@@ -43,66 +23,67 @@ class YoloDetector:
         self._model: YOLO | None = None
 
     def _model_lazy(self) -> YOLO:
-        # Lazy-Load: Modell erst beim ersten detect() laden, nicht beim Import.
         if self._model is None:
             self._model = YOLO(MODEL_PATH)
         return self._model
 
-    def detect(self, object_name: str) -> VisionResult:
+    def prewarm(self) -> None:
+        """Modell vorladen — vom Server beim Start aufgerufen."""
+        self._model_lazy()
+
+    def stream(
+        self,
+        object_name: str,
+        on_frame: FrameCallback,
+        stop_event: threading.Event,
+    ) -> None:
         model = self._model_lazy()
-        target_labels = _resolve_labels(object_name)
+        target = object_name.lower()
         names: dict[int, str] = model.names
 
         cap = cv2.VideoCapture(CAMERA_INDEX)
         if not cap.isOpened():
             raise RuntimeError(f"Kamera {CAMERA_INDEX} konnte nicht geöffnet werden.")
 
-        stable_count = 0
-        last = (0.0, 0.0, 0.0)  # (conf, x, y)
-        deadline = time.monotonic() + TIMEOUT_SECONDS
-
         try:
-            while time.monotonic() < deadline:
+            while not stop_event.is_set():
                 ok, frame = cap.read()
                 if not ok:
                     time.sleep(0.02)
                     continue
 
                 results = model.predict(frame, conf=CONFIDENCE_MIN, verbose=False, imgsz=640)
-                match = _best_match(results[0], names, target_labels)
+                match = _best_match(results[0], names, target)
 
                 if match is None:
-                    stable_count = 0
-                    continue
-
-                # Treffer muss N Frames in Folge stabil sein → reduziert False Positives.
-                last = match
-                stable_count += 1
-                if stable_count >= STABLE_FRAMES_REQUIRED:
-                    conf, x, y = last
-                    return VisionResult(object_name, True, round(conf, 4), round(x, 4), round(y, 4))
+                    on_frame(VisionResult(object_name, False, 0.0))
+                else:
+                    conf, x, y, w, h = match
+                    on_frame(VisionResult(
+                        object_name, True,
+                        round(conf, 4),
+                        round(x, 4), round(y, 4),
+                        round(w, 4), round(h, 4),
+                    ))
         finally:
             cap.release()
 
-        return VisionResult(object_name, False, 0.0)
 
-
-def _best_match(result, names, target_labels) -> tuple[float, float, float] | None:
-    """Liefert (conf, x_norm, y_norm) der besten passenden Box, oder None."""
+def _best_match(result, names: dict, target: str):
+    """Beste passende Box als (conf, x, y, w, h) normiert auf 0..1, oder None."""
     if result.boxes is None or len(result.boxes) == 0:
         return None
 
     img_h, img_w = result.orig_shape
-    targets_lower = {lbl.lower() for lbl in target_labels}
     best = None
 
     for box in result.boxes:
         label = names.get(int(box.cls[0]), "").lower()
-        if label not in targets_lower:
+        if label != target:
             continue
         conf = float(box.conf[0])
         if best is None or conf > best[0]:
-            x_px, y_px, _, _ = box.xywh[0].tolist()
-            best = (conf, x_px / img_w, y_px / img_h)
+            x_px, y_px, w_px, h_px = box.xywh[0].tolist()
+            best = (conf, x_px / img_w, y_px / img_h, w_px / img_w, h_px / img_h)
 
     return best

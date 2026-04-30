@@ -1,28 +1,33 @@
 """Gemeinsame Typen und Detector-Protokoll für Team Visual."""
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol
 
 
 @dataclass
 class VisionResult:
+    """Ergebnis eines einzelnen Frames."""
     name: str
     found: bool
     confidence: float
     x: float | None = None
     y: float | None = None
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "found": self.found,
-            "confidence": self.confidence,
-            "x": self.x,
-            "y": self.y,
-        }
+    w: float | None = None
+    h: float | None = None
 
 
-@runtime_checkable
+# Detector-Callback pro Frame. visual.py registriert hier seinen Window-Append.
+FrameCallback = Callable[[VisionResult], None]
+
+
 class DetectorProtocol(Protocol):
-    def detect(self, object_name: str) -> VisionResult: ...
+    """Detector im Streaming-Modus. Läuft bis stop_event gesetzt wird."""
+
+    def stream(
+        self,
+        object_name: str,
+        on_frame: FrameCallback,
+        stop_event: threading.Event,
+    ) -> None: ...

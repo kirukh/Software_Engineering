@@ -1,127 +1,189 @@
 """
-test_visual.py — Tests für die Visual-Schnittstelle.
+test_visual.py — Tests für die Tracking-API.
 
-    python test_visual.py           # Fake-Tests, ohne Hardware
-    python test_visual.py --live    # zusätzlich: echter Webcam-Test mit Smartphone
+    python test_visual.py            # Fake-Tests, ohne Hardware
+    python test_visual.py --server   # zusätzlich: HTTP-Endpoints via VisualClient
+
+Echter Webcam-Test: siehe live_e2e_test.py
 """
 from __future__ import annotations
 
 import sys
+import threading
 import time
 
 import visual
 from vision_interface import VisionResult
 
 
-# ------------------------------------------------------------------ Fakes
+# ------------------------------------------------------------------ Fake-Detektoren
 
-class _FakeFound:
-    def detect(self, name): return VisionResult(name, True, 0.92, 0.5, 0.5)
+class _AlwaysFoundDetector:
+    def stream(self, name, on_frame, stop_event):
+        while not stop_event.is_set():
+            on_frame(VisionResult(name, True, 0.9, 0.5, 0.5, 0.2, 0.3))
+            time.sleep(0.01)
 
 
-class _FakeNotFound:
-    def detect(self, name): return VisionResult(name, False, 0.0)
-
-
-class _SlowFake:
-    """Simuliert langsame Detection — wichtig für den Cancel-Test."""
-    def detect(self, name):
-        time.sleep(2.0)
-        return VisionResult(name, True, 0.8, 0.3, 0.7)
+class _NeverFoundDetector:
+    def stream(self, name, on_frame, stop_event):
+        while not stop_event.is_set():
+            on_frame(VisionResult(name, False, 0.0))
+            time.sleep(0.01)
 
 
 def trennlinie(titel: str) -> None:
-    print(f"\n{'='*50}\n  {titel}\n{'='*50}")
+    print(f"\n{'='*55}\n  {titel}\n{'='*55}")
 
 
-# ------------------------------------------------------------------ Fake Tests
+def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.05) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
+# ------------------------------------------------------------------ Fake-Tests
 
 def run_fake_tests() -> None:
-    trennlinie("Test 1: Sync search() — gefunden")
-    visual.set_detector(_FakeFound())
-    result = visual.search({"name": "smartphone"})
+    trennlinie("Test 1: idle vor start_tracking()")
+    visual.stop_tracking()
+    result = visual.get_latest()
     print(f"  {result}")
-    assert result == {"name": "smartphone", "found": True, "confidence": 0.92, "x": 0.5, "y": 0.5}
-    print("  ✓ Dict-Format korrekt")
+    assert result == {"status": "idle"}
+    print("  ✓ idle wenn nichts läuft")
 
-    trennlinie("Test 2: Sync search() — nicht gefunden")
-    visual.set_detector(_FakeNotFound())
-    result = visual.search({"name": "laptop"})
+    trennlinie("Test 2: start_tracking() + get_latest() — immer gefunden")
+    visual.set_detector(_AlwaysFoundDetector())
+    visual.start_tracking("smartphone")
+
+    assert _wait_until(lambda: visual.get_latest().get("found") is True), \
+        "Window wurde nicht rechtzeitig mit Treffern gefüllt"
+    result = visual.get_latest()
     print(f"  {result}")
-    assert result["found"] is False and result["x"] is None and result["y"] is None
-    print("  ✓ Not-Found-Fall korrekt")
-
-    trennlinie("Test 3: Ungültige Anfragen")
-    for bad in [{}, {"falsch": "x"}, {"name": ""}, {"name": "   "}, "kein dict"]:
-        try:
-            visual.search(bad)
-            raise AssertionError(f"Erwartet ValueError für {bad!r}")
-        except ValueError as e:
-            print(f"  ✓ {bad!r} → {e}")
-
-    trennlinie("Test 4: Async start_search() + get_result()")
-    visual.set_detector(_FakeFound())
-    job = visual.start_search({"name": "cup"})
-    print(f"  Gestartet: {job}")
-    time.sleep(0.2)
-    result = visual.get_result(job["job_id"])
-    print(f"  {result}")
-    assert result["status"] == "done" and result["found"] is True
-    print("  ✓ Async-Flow funktioniert")
-
-    trennlinie("Test 5: Cancel eines laufenden Jobs")
-    visual.set_detector(_SlowFake())
-    job = visual.start_search({"name": "bottle"})
-    job_id = job["job_id"]
-    time.sleep(0.1)
-    assert visual.get_result(job_id)["status"] == "running"
-    print(f"  Cancel: {visual.cancel(job_id)}")
-    assert visual.get_result(job_id)["status"] == "cancelled"
-    print("  ✓ Cancel funktioniert")
-
-    trennlinie("Test 6: Unbekannte job_id")
-    result = visual.get_result("gibt-es-nicht")
-    print(f"  {result}")
-    assert result["status"] == "unknown"
-    print("  ✓ Unknown-Fall korrekt")
-
-
-# ------------------------------------------------------------------ Live Test
-
-def run_live_test() -> None:
-    """Echter End-to-End-Test mit Webcam + YOLO."""
-    import os
-    os.environ["VISUAL_DETECTOR"] = "yolo"
-    visual.set_detector(None)  # vorherige Fakes wegwerfen
-
-    trennlinie("LIVE-Test: Webcam + echtes Smartphone")
-    print("  ▶  Halte dein Smartphone gut sichtbar in die Kamera (Timeout 30s).")
-    input("  ⏎  Enter zum Starten ...")
-
-    start = time.monotonic()
-    result = visual.search({"name": "smartphone"})
-    print(f"\n  Ergebnis: {result}")
-    print(f"  Dauer: {time.monotonic() - start:.1f}s")
-
+    assert result["status"] == "running"
+    assert result["found"] is True
     assert result["name"] == "smartphone"
-    assert result["found"] is True, (
-        "Smartphone NICHT erkannt — Licht / Konfidenz-Schwelle "
-        "(VISION_CONFIDENCE_MIN) / VISION_STABLE_FRAMES prüfen."
-    )
-    assert result["confidence"] >= 0.5
-    assert 0.0 <= result["x"] <= 1.0 and 0.0 <= result["y"] <= 1.0
-    print(f"  ✓ Erkannt mit Konfidenz {result['confidence']:.2f} bei "
-          f"x={result['x']:.2f}, y={result['y']:.2f}")
+    assert 0.0 <= result["confidence"] <= 1.0
+    assert result["x"] is not None and result["y"] is not None
+    assert result["w"] is not None and result["h"] is not None
+    print("  ✓ Tracking liefert aggregiertes Treffer-Dict mit w/h")
+
+    trennlinie("Test 3: stop_tracking()")
+    stop_result = visual.stop_tracking()
+    print(f"  stop: {stop_result}")
+    assert stop_result["status"] == "stopped"
+    assert stop_result["was_running"] is True
+
+    latest = visual.get_latest()
+    print(f"  latest nach stop: {latest}")
+    assert latest == {"status": "idle"}
+    print("  ✓ Stop funktioniert, status zurück auf idle")
+
+    trennlinie("Test 4: Nie-Gefunden → found=False")
+    visual.set_detector(_NeverFoundDetector())
+    visual.start_tracking("laptop")
+
+    time.sleep(0.3)  # Window auffüllen lassen
+    result = visual.get_latest()
+    print(f"  {result}")
+    assert result["status"] == "running"
+    assert result["found"] is False
+    assert result["name"] == "laptop"
+    assert result["x"] is None and result["y"] is None
+    assert result["w"] is None and result["h"] is None
+    visual.stop_tracking()
+    print("  ✓ Not-Found-Aggregat korrekt")
+
+    trennlinie("Test 5: Idempotentes start_tracking()")
+    visual.set_detector(_AlwaysFoundDetector())
+    r1 = visual.start_tracking("cup")
+    r2 = visual.start_tracking("cup")
+    assert r1["status"] == "running" and r2["status"] == "running"
+    visual.stop_tracking()
+    print("  ✓ Doppelter start ist no-op")
+
+    trennlinie("Test 6: stop_tracking() ohne laufendes Tracking")
+    result = visual.stop_tracking()
+    print(f"  {result}")
+    assert result["status"] == "stopped"
+    assert result["was_running"] is False
+    print("  ✓ Stop ist idempotent")
+
+
+# ------------------------------------------------------------------ Server-Test
+
+def run_server_tests() -> None:
+    """Startet Server, ruft Endpoints via VisualClient — wie der Controller."""
+    try:
+        import uvicorn
+        from visual_client import VisualClient
+    except ImportError:
+        print("  Skip: httpx / uvicorn nicht installiert.")
+        return
+
+    visual.set_detector(_AlwaysFoundDetector())
+
+    import server
+    config = uvicorn.Config(server.app, host="127.0.0.1", port=8765, log_level="warning")
+    srv = uvicorn.Server(config)
+    threading.Thread(target=srv.run, daemon=True).start()
+
+    client = VisualClient(base_url="http://127.0.0.1:8765")
+    if not _wait_until(client.health, timeout=10.0):
+        raise RuntimeError("Server ist nicht hochgekommen")
+
+    try:
+        trennlinie("Server-Test 1: /health via client.health()")
+        assert client.health() is True
+        print("  ✓ Server antwortet")
+
+        trennlinie("Server-Test 2: latest() vor start → idle")
+        r = client.latest()
+        print(f"  {r}")
+        assert r["status"] == "idle"
+
+        trennlinie("Server-Test 3: start() + latest() polling")
+        print(f"  start: {client.start('smartphone')}")
+        for _ in range(20):
+            r = client.latest()
+            if r.get("found"):
+                break
+            time.sleep(0.1)
+        print(f"  latest: {r}")
+        assert r["status"] == "running"
+        assert r["found"] is True
+        assert r["w"] is not None and r["h"] is not None
+
+        trennlinie("Server-Test 4: stop()")
+        r = client.stop()
+        print(f"  {r}")
+        assert r["status"] == "stopped"
+
+        trennlinie("Server-Test 5: validation error (leerer name)")
+        # Direkter Test über interne Schicht — Pydantic-422 hat client.start nicht durchgelassen.
+        import httpx
+        r = httpx.post("http://127.0.0.1:8765/track/start", json={"name": "  "})
+        print(f"  {r.status_code}")
+        assert r.status_code == 422
+        print("  ✓ Pydantic-Validation greift")
+    finally:
+        srv.should_exit = True
+        client.close()
+        visual.stop_tracking()
+        visual.set_detector(None)
 
 
 # ------------------------------------------------------------------ Main
 
 if __name__ == "__main__":
     run_fake_tests()
+    trennlinie("Alle Fake-Tests bestanden ✓")
 
-    if "--live" in sys.argv:
-        run_live_test()
-        trennlinie("Alle Tests bestanden ✓ (inkl. Live-Test)")
+    if "--server" in sys.argv:
+        run_server_tests()
+        trennlinie("Server-Tests bestanden ✓")
     else:
-        trennlinie("Alle Fake-Tests bestanden ✓")
-        print("\n  Tipp: Live-Test mit Webcam → python test_visual.py --live")
+        print("\n  Tipp: --server für HTTP-Endpoint-Tests | live_e2e_test.py für Webcam")
