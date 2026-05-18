@@ -24,11 +24,11 @@ os.environ.setdefault("VISUAL_DETECTOR", "yolo")
 import uvicorn
 
 import server
+from config import CONFIG
 from visual_client import VisualClient
 
 
-PORT = int(os.environ.get("VISUAL_PORT", "7995"))
-BASE_URL = f"http://127.0.0.1:{PORT}"
+BASE_URL = f"http://127.0.0.1:{CONFIG.port}"
 
 
 def wait_for_server(client: VisualClient, timeout: float) -> None:
@@ -57,8 +57,10 @@ def run_live_e2e(target: str, duration: float) -> None:
     print(f"  Live-E2E-Test: Tracking auf '{target}', {duration:.0f}s")
     print(f"{'='*60}\n")
 
-    print("[1/4] Server wird gestartet...")
-    config = uvicorn.Config(server.app, host="127.0.0.1", port=PORT, log_level="warning")
+    print(f"[1/4] Server wird gestartet auf {BASE_URL}...")
+    config = uvicorn.Config(
+        server.app, host="127.0.0.1", port=CONFIG.port, log_level="warning",
+    )
     threading.Thread(target=uvicorn.Server(config).run, daemon=True).start()
 
     print("[2/4] Auf Server-Health warten (lädt YOLO-Modell, kann 10-30s dauern)...")

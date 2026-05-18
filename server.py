@@ -6,18 +6,11 @@ FastAPI auf 127.0.0.1:7995 (Default). Endpoints:
     POST   /track/stop     Tracking beenden
     GET    /health         Server-Check (inkl. aktiver Detector)
 
-Port 7995 liegt in der Visual-Range 7991–8000 (Festlegung Prof. Jehle).
-
-Konfiguration über Env-Variablen:
-    VISUAL_HOST     Default 127.0.0.1 — auf 0.0.0.0 setzen, wenn andere
-                    Geräte zugreifen können sollen
-    VISUAL_PORT     Default 7995
-    VISUAL_DETECTOR Default leer (auto: Hailo > YOLO).
-                    'hailo' oder 'yolo' erzwingt einen Detector.
+Konfiguration: siehe config.py (Defaults < config.yaml < Env-Variablen).
+Aktive Werte anzeigen: `python config.py`.
 """
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -25,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 import visual
+from config import CONFIG
 
 
 @asynccontextmanager
@@ -47,7 +41,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="visual_api",
     description="Tracking-API für das Visual-Modul",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -119,7 +113,5 @@ def health() -> HealthRes:
 # ------------------------------------------------------------------ Main
 
 if __name__ == "__main__":
-    HOST = os.environ.get("VISUAL_HOST", "127.0.0.1")
-    PORT = int(os.environ.get("VISUAL_PORT", "7995"))
-    print(f"[server] Starte auf {HOST}:{PORT}")
-    uvicorn.run("server:app", host=HOST, port=PORT, reload=False)
+    print(f"[server] Starte auf {CONFIG.host}:{CONFIG.port}")
+    uvicorn.run("server:app", host=CONFIG.host, port=CONFIG.port, reload=False)

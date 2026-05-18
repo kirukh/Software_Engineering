@@ -7,26 +7,20 @@ Logik-Schicht zwischen HTTP (server.py) und Detector:
     stop_tracking()        # Detector sauber beenden
     prewarm()              # Modell vorladen (vom Server beim Start)
 
-Aggregation: Sliding Window über die letzten N Roh-Frames vom Detector
-(Default 8). Mind. M Treffer (Default 5) im Fenster → found=True mit
-Mittelwerten. Sonst found=False.
+Aggregation: Sliding Window über die letzten N Roh-Frames vom Detector.
+Größe und Mindesttreffer kommen aus CONFIG (siehe config.py).
 
-Detector-Wahl per VISUAL_DETECTOR=hailo|yolo. Ohne Env-Var: Auto-Modus —
-Hailo wird probiert, bei jedem Fehler fällt der Code auf YOLO zurück
-(Sprint-Ziel: Rollout muss laufen, auch wenn das Hailo-Kit hakt).
+Detector-Wahl per CONFIG.detector_mode (auch via VISUAL_DETECTOR Env-Var).
+Auto-Modus: Hailo wird probiert, bei jedem Fehler fällt der Code auf YOLO
+zurück (Sprint-Ziel: Rollout muss laufen, auch wenn das Hailo-Kit hakt).
 """
 from __future__ import annotations
 
-import os
 import threading
 from collections import deque
 
-from vision_interface import DetectorProtocol, VisionResult
-
-# ------------------------------------------------------------------ Config
-
-WINDOW_SIZE = int(os.environ.get("VISION_WINDOW_SIZE", "8"))
-MIN_HITS_IN_WINDOW = int(os.environ.get("VISION_MIN_HITS_IN_WINDOW", "5"))
+from config import CONFIG
+from visual_interface import DetectorProtocol, VisionResult
 
 
 # ------------------------------------------------------------------ State
@@ -40,7 +34,7 @@ _stop_event: threading.Event | None = None
 _current_name: str | None = None
 
 _window_lock = threading.Lock()
-_window: deque[VisionResult] = deque(maxlen=WINDOW_SIZE)
+_window: deque[VisionResult] = deque(maxlen=CONFIG.window_size)
 
 
 # ------------------------------------------------------------------ Detector-Wahl
@@ -79,7 +73,7 @@ def _get_detector() -> DetectorProtocol:
     if _detector is not None:
         return _detector
 
-    mode = os.environ.get("VISUAL_DETECTOR", "").strip().lower()
+    mode = CONFIG.detector_mode
 
     if mode == "yolo":
         _detector = _try_yolo()
@@ -89,8 +83,8 @@ def _get_detector() -> DetectorProtocol:
         d = _try_hailo()
         if d is None:
             raise RuntimeError(
-                "VISUAL_DETECTOR=hailo gesetzt, aber Hailo nicht verfügbar. "
-                "Entweder Env-Variable entfernen (Auto-Fallback) oder Hailo-Stack reparieren."
+                "detector_mode='hailo' gesetzt, aber Hailo nicht verfügbar. "
+                "Entweder Config/Env entfernen (Auto-Fallback) oder Hailo-Stack reparieren."
             )
         _detector = d
         _active_detector_name = "hailo"
@@ -142,7 +136,7 @@ def _aggregate() -> dict:
         name = _current_name or ""
 
     hits = [f for f in snapshot if f.found]
-    if len(hits) < MIN_HITS_IN_WINDOW:
+    if len(hits) < CONFIG.min_hits_in_window:
         return _empty_result(name)
 
     n = len(hits)
@@ -241,8 +235,8 @@ def _stop_locked() -> None:
     if _stop_event is not None:
         _stop_event.set()
     if _tracking_thread is not None:
-        # 5s Timeout: GStreamer-Pipeline braucht u.U. etwas zum Aufräumen.
-        _tracking_thread.join(timeout=5.0)
+        # Timeout aus Config: GStreamer-Pipeline braucht u.U. etwas zum Aufräumen.
+        _tracking_thread.join(timeout=CONFIG.stop_timeout_seconds)
     _tracking_thread = None
     _stop_event = None
     _current_name = None

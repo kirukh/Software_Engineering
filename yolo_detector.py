@@ -1,18 +1,14 @@
 """YoloDetector — DetectorProtocol-Implementierung mit YOLOv8 + Webcam."""
 from __future__ import annotations
 
-import os
 import threading
 import time
 
 import cv2
 from ultralytics import YOLO
 
-from vision_interface import FrameCallback, VisionResult
-
-CONFIDENCE_MIN = float(os.environ.get("VISION_CONFIDENCE_MIN", "0.5"))
-CAMERA_INDEX = int(os.environ.get("VISION_CAMERA_INDEX", "0"))
-MODEL_PATH = os.environ.get("VISION_MODEL_PATH", "yolov8n.pt")
+from config import CONFIG
+from visual_interface import FrameCallback, VisionResult
 
 # Hinweis: Der Controller liefert immer bereits korrekte COCO-Labels
 # (Mapping passiert im Audio-Team). Daher kein Aliasing hier nötig.
@@ -24,7 +20,7 @@ class YoloDetector:
 
     def _model_lazy(self) -> YOLO:
         if self._model is None:
-            self._model = YOLO(MODEL_PATH)
+            self._model = YOLO(CONFIG.model_path)
         return self._model
 
     def prewarm(self) -> None:
@@ -41,9 +37,9 @@ class YoloDetector:
         target = object_name.lower()
         names: dict[int, str] = model.names
 
-        cap = cv2.VideoCapture(CAMERA_INDEX)
+        cap = cv2.VideoCapture(CONFIG.camera_index)
         if not cap.isOpened():
-            raise RuntimeError(f"Kamera {CAMERA_INDEX} konnte nicht geöffnet werden.")
+            raise RuntimeError(f"Kamera {CONFIG.camera_index} konnte nicht geöffnet werden.")
 
         try:
             while not stop_event.is_set():
@@ -52,7 +48,9 @@ class YoloDetector:
                     time.sleep(0.02)
                     continue
 
-                results = model.predict(frame, conf=CONFIDENCE_MIN, verbose=False, imgsz=640)
+                results = model.predict(
+                    frame, conf=CONFIG.confidence_min, verbose=False, imgsz=640
+                )
                 match = _best_match(results[0], names, target)
 
                 if match is None:

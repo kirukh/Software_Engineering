@@ -36,10 +36,51 @@ mind. M Treffern (Default 5) → `found=True` mit Mittelwerten von
 `confidence`, `x`, `y`, `w`, `h`. Sonst `found=False` mit allen Koordinaten
 auf `null`.
 
-## HTTP-API
+## Konfiguration
 
-Server läuft per Default auf `127.0.0.1:7995` (Port-Range Visual: 7991–8000,
-festgelegt vom Prof).
+Alle Parameter liegen in `config.py` als `VisualConfig`-Dataclass.
+
+**Drei Ebenen, später hat Vorrang:**
+1. Defaults im Code
+2. `config.yaml` im Repo-Root (optional, braucht PyYAML)
+3. Umgebungsvariablen
+
+Aktive Werte anzeigen:
+```bash
+python config.py
+```
+
+Beispielausgabe:
+```
+Aktive Visual-Konfiguration:
+  host                      = '127.0.0.1'                (Env: VISUAL_HOST)
+  port                      = 7995                       (Env: VISUAL_PORT)
+  detector_mode             = ''                         (Env: VISUAL_DETECTOR)
+  confidence_min            = 0.5                        (Env: VISION_CONFIDENCE_MIN)
+  ...
+```
+
+| Feld | Default | Env-Variable | Bedeutung |
+|---|---|---|---|
+| `host` | `127.0.0.1` | `VISUAL_HOST` | Server-Bind. `0.0.0.0` für externen Zugriff |
+| `port` | `7995` | `VISUAL_PORT` | Server-Port (Range 7991–8000) |
+| `detector_mode` | `""` (auto) | `VISUAL_DETECTOR` | `"hailo"`, `"yolo"`, oder leer für Auto |
+| `confidence_min` | `0.5` | `VISION_CONFIDENCE_MIN` | Mindest-Konfidenz pro Frame |
+| `window_size` | `8` | `VISION_WINDOW_SIZE` | Sliding-Window-Größe |
+| `min_hits_in_window` | `5` | `VISION_MIN_HITS_IN_WINDOW` | Mindesttreffer für `found=true` |
+| `camera_index` | `0` | `VISION_CAMERA_INDEX` | Webcam-Index (nur YOLO) |
+| `model_path` | `yolov8n.pt` | `VISION_MODEL_PATH` | YOLO-Modell-Pfad |
+| `stop_timeout_seconds` | `5.0` | `VISION_STOP_TIMEOUT_SECONDS` | Wait beim Tracking-Stop |
+
+**`config.yaml` nutzen:**
+```bash
+cp config.yaml.example config.yaml
+pip install pyyaml          # falls noch nicht da
+# edit config.yaml as desired
+python server.py
+```
+
+## HTTP-API
 
 ### `POST /track/start`
 ```json
@@ -93,9 +134,9 @@ VISUAL_HOST=0.0.0.0 python server.py
 
 | Konfiguration | Hailo OK | Hailo kaputt |
 |---|---|---|
-| `VISUAL_DETECTOR` leer (Auto) | nutzt Hailo | fällt auf YOLO, Server läuft |
-| `VISUAL_DETECTOR=hailo` | nutzt Hailo | Server-Start failed |
-| `VISUAL_DETECTOR=yolo` | nutzt YOLO | nutzt YOLO |
+| `detector_mode` leer (Auto) | nutzt Hailo | fällt auf YOLO, Server läuft |
+| `detector_mode=hailo` | nutzt Hailo | Server-Start failed |
+| `detector_mode=yolo` | nutzt YOLO | nutzt YOLO |
 
 Sprint-Ziel ist "Rollout muss laufen" — der Auto-Modus stellt das sicher.
 Wenn ihr explizit Hailo *messen* wollt (z.B. Inferenz-Performance), nutzt den
@@ -123,29 +164,13 @@ with VisualClient() as visual:
 > `"handy"`. Das Audio-Team mappt Sprache auf COCO-Labels, bevor es zum
 > Controller geht. `coco.yaml` ist die geteilte Source-of-Truth.
 
-## Konfiguration
-
-Alle Tuning-Parameter über Umgebungsvariablen:
-
-| Variable | Default | Bedeutung |
-|---|---|---|
-| `VISUAL_HOST` | `127.0.0.1` | Server-Bind. `0.0.0.0` für externen Zugriff |
-| `VISUAL_PORT` | `7995` | Server-Port (Visual-Range: 7991–8000) |
-| `VISUAL_DETECTOR` | *(auto)* | `hailo` oder `yolo` erzwingen |
-| `VISION_CONFIDENCE_MIN` | `0.5` | Mindest-Konfidenz pro Frame |
-| `VISION_WINDOW_SIZE` | `8` | Größe des Sliding Windows in Frames |
-| `VISION_MIN_HITS_IN_WINDOW` | `5` | Treffer-Mindestanzahl im Window für `found=True` |
-| `VISION_CAMERA_INDEX` | `0` | Webcam-Index (nur YOLO) |
-| `VISION_MODEL_PATH` | `yolov8n.pt` | YOLO-Modell-Pfad |
-
-> Eine zentrale Config-Datei für alle Teams ist in Diskussion, Vorschlag Sprint 4.
-
 ## Tests
 
 ```bash
+python config.py                 # aktive Config anzeigen
 python test_visual.py            # Fake-Tests, ohne Hardware
-python test_visual.py --server   # zusätzlich HTTP-Endpoints (mit Fake im Test)
-python live_e2e_test.py          # interaktiver Webcam-Test, Default cell phone 30s
+python test_visual.py --server   # zusätzlich HTTP-Endpoints (mit Fake)
+python live_e2e_test.py          # interaktiver Webcam-Test (YOLO), Default cell phone 30s
 ```
 
 ## Architektur-Entscheidung: HTTP-Server (Sprint 2)
@@ -170,6 +195,7 @@ Optionen waren:
 | FR-04 | Ergebnis mit `name`, `found`, `confidence`, `x`, `y`, `w`, `h` zurückgeben |
 | FR-05 | Sliding-Window-Aggregation über N Frames für stabile Ausgabe |
 | FR-06 | Auto-Fallback Hailo → YOLO, damit Rollout auch ohne funktionierendes AI Kit läuft |
+| FR-07 | Zentrale Konfiguration (`config.py`) mit Env-Override und optional YAML |
 | ITF-01 | HTTP-API: `POST /track/start`, `GET /track/latest`, `POST /track/stop` |
 | ITF-02 | JSON-Antworten, Pydantic-validiert |
 | ITF-03 | `GET /health` liefert aktiven Detector zurück (zum Debuggen) |

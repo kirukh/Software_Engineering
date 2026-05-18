@@ -13,7 +13,7 @@ import threading
 import time
 
 import visual
-from vision_interface import VisionResult
+from visual_interface import VisionResult
 
 
 # ------------------------------------------------------------------ Fake-Detektoren

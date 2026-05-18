@@ -1,10 +1,10 @@
 """HailoDetector — DetectorProtocol-Implementierung für Pi 5 + Hailo-8."""
 from __future__ import annotations
 
-import os
 import threading
 
-from vision_interface import FrameCallback, VisionResult
+from config import CONFIG
+from visual_interface import FrameCallback, VisionResult
 
 # Hailo-Stack ist nur auf dem Pi installiert — Imports dürfen auf dem Laptop fehlschlagen.
 _hailo_available = False
@@ -23,8 +23,6 @@ except ImportError:
 
 # Hinweis: Der Controller liefert immer bereits korrekte COCO-Labels
 # (Mapping passiert im Audio-Team). Daher kein Aliasing hier nötig.
-
-CONFIDENCE_MIN = float(os.environ.get("VISION_CONFIDENCE_MIN", "0.5"))
 
 
 class HailoDetector:
@@ -124,7 +122,7 @@ def _make_callback(
             if label != target:
                 continue
             conf = float(det.get_confidence())
-            if conf >= CONFIDENCE_MIN and conf > best_conf:
+            if conf >= CONFIG.confidence_min and conf > best_conf:
                 bbox = det.get_bbox()
                 best_conf = conf
                 best_x, best_y = bbox.x_center(), bbox.y_center()
