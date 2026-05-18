@@ -6,7 +6,7 @@ import threading
 
 from vision_interface import FrameCallback, VisionResult
 
-# Hailo-Stack ist nur auf dem Pi installiert — Imports darf auf dem Laptop fehlschlagen.
+# Hailo-Stack ist nur auf dem Pi installiert — Imports dürfen auf dem Laptop fehlschlagen.
 _hailo_available = False
 try:
     import gi
@@ -46,23 +46,69 @@ class HailoDetector:
         class _UserData(app_callback_class):
             pass
 
-        app = GStreamerDetectionApp(_make_callback(target, object_name, on_frame, stop_event), _UserData())
+        app = GStreamerDetectionApp(
+            _make_callback(target, object_name, on_frame, stop_event),
+            _UserData(),
+        )
 
-        # GStreamer in eigenem Thread, damit wir auf stop_event reagieren können.
-        threading.Thread(target=app.run, daemon=True).start()
+        # GStreamer-Mainloop blockiert — in eigenen Thread auslagern,
+        # damit wir hier auf stop_event reagieren können.
+        runner = threading.Thread(target=app.run, daemon=True)
+        runner.start()
+
         stop_event.wait()
 
-        # Pipeline sauber stoppen, falls die Hailo-Version es unterstützt.
+        # Pipeline-Shutdown — mehrere Pfade versuchen, je nach Hailo-Version.
+        _shutdown_pipeline(app)
+
+        # Auf das saubere Ende warten, damit die Kamera/Pipeline frei wird.
+        runner.join(timeout=3.0)
+
+
+def _shutdown_pipeline(app) -> None:
+    """Pipeline runterfahren — robust gegen API-Unterschiede zwischen Hailo-Versionen.
+
+    Wir kennen die exakte API nicht (Pi-Live-Test steht noch aus), daher
+    werden ALLE bekannten Pfade durchlaufen, nicht nur der erste der greift.
+    Das ist redundant, aber ein doppeltes set_state(NULL) ist gefahrlos —
+    ein hängender GLib.MainLoop nicht.
+
+      1) app.shutdown()                          — Hailo-eigene Methode
+      2) app.pipeline.set_state(Gst.State.NULL)  — Standard-GStreamer
+      3) app.loop.quit()                         — GLib-MainLoop killen
+    """
+    # 1) Hailo-eigene Methode
+    if hasattr(app, "shutdown"):
         try:
             app.shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[hailo] app.shutdown() warf Fehler: {e}")
+
+    # 2) GStreamer-Pipeline auf NULL setzen
+    try:
+        pipeline = getattr(app, "pipeline", None)
+        if pipeline is not None:
+            pipeline.set_state(Gst.State.NULL)
+    except Exception as e:
+        print(f"[hailo] pipeline.set_state(NULL) warf Fehler: {e}")
+
+    # 3) GLib.MainLoop quitten (nötig, sonst hängt der Runner-Thread)
+    try:
+        loop = getattr(app, "loop", None)
+        if loop is not None and hasattr(loop, "quit"):
+            loop.quit()
+    except Exception as e:
+        print(f"[hailo] loop.quit() warf Fehler: {e}")
 
 
-def _make_callback(target: str, original_name: str, on_frame: FrameCallback, stop_event: threading.Event):
+def _make_callback(
+    target: str,
+    original_name: str,
+    on_frame: FrameCallback,
+    stop_event: threading.Event,
+):
     """Wird pro Frame aus der GStreamer-Pipeline aufgerufen."""
     def _callback(pad, info, user_data):
-        from gi.repository import Gst
         if stop_event.is_set():
             return Gst.PadProbeReturn.OK
 

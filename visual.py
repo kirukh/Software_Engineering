@@ -11,7 +11,9 @@ Aggregation: Sliding Window über die letzten N Roh-Frames vom Detector
 (Default 8). Mind. M Treffer (Default 5) im Fenster → found=True mit
 Mittelwerten. Sonst found=False.
 
-Detector-Wahl per VISUAL_DETECTOR=hailo|yolo (sonst Auto: Hailo > YOLO).
+Detector-Wahl per VISUAL_DETECTOR=hailo|yolo. Ohne Env-Var: Auto-Modus —
+Hailo wird probiert, bei jedem Fehler fällt der Code auf YOLO zurück
+(Sprint-Ziel: Rollout muss laufen, auch wenn das Hailo-Kit hakt).
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ MIN_HITS_IN_WINDOW = int(os.environ.get("VISION_MIN_HITS_IN_WINDOW", "5"))
 # ------------------------------------------------------------------ State
 
 _detector: DetectorProtocol | None = None
+_active_detector_name: str = "none"  # für /health-Antwort, hilft dem Controller-Team
 
 _tracking_lock = threading.Lock()
 _tracking_thread: threading.Thread | None = None
@@ -42,31 +45,65 @@ _window: deque[VisionResult] = deque(maxlen=WINDOW_SIZE)
 
 # ------------------------------------------------------------------ Detector-Wahl
 
+def _try_hailo() -> DetectorProtocol | None:
+    """Versucht Hailo zu instanziieren. Gibt None zurück, wenn nicht verfügbar.
+
+    Fängt JEDES Problem ab (Import, fehlende GStreamer-Bindings, kaputte
+    Hailo-Treiber, defekte Module). Sprint-Ziel: Auto-Modus muss am Ende
+    immer einen Detector liefern, notfalls YOLO.
+    """
+    try:
+        from hailo_detector import HailoDetector, _hailo_available
+    except Exception as e:
+        print(f"[visual] Hailo-Module nicht importierbar: {e}")
+        return None
+
+    if not _hailo_available:
+        return None
+
+    try:
+        return HailoDetector()
+    except Exception as e:
+        print(f"[visual] Hailo-Initialisierung fehlgeschlagen: {e}")
+        return None
+
+
+def _try_yolo() -> DetectorProtocol:
+    """Lädt YOLO. Soll funktionieren, wenn ultralytics installiert ist."""
+    from yolo_detector import YoloDetector
+    return YoloDetector()
+
+
 def _get_detector() -> DetectorProtocol:
-    global _detector
+    global _detector, _active_detector_name
     if _detector is not None:
         return _detector
 
     mode = os.environ.get("VISUAL_DETECTOR", "").strip().lower()
 
     if mode == "yolo":
-        from yolo_detector import YoloDetector
-        _detector = YoloDetector()
+        _detector = _try_yolo()
+        _active_detector_name = "yolo"
     elif mode == "hailo":
-        from hailo_detector import HailoDetector, _hailo_available
-        if not _hailo_available:
-            raise RuntimeError("VISUAL_DETECTOR=hailo gesetzt, aber Hailo nicht verfügbar.")
-        _detector = HailoDetector()
+        # Explizit gewollt: kein Fallback, hart failen.
+        d = _try_hailo()
+        if d is None:
+            raise RuntimeError(
+                "VISUAL_DETECTOR=hailo gesetzt, aber Hailo nicht verfügbar. "
+                "Entweder Env-Variable entfernen (Auto-Fallback) oder Hailo-Stack reparieren."
+            )
+        _detector = d
+        _active_detector_name = "hailo"
     else:
-        # Auto: Hailo bevorzugt, YOLO als Fallback ohne Hardware
-        try:
-            from hailo_detector import HailoDetector, _hailo_available
-            if not _hailo_available:
-                raise ImportError
-            _detector = HailoDetector()
-        except ImportError:
-            from yolo_detector import YoloDetector
-            _detector = YoloDetector()
+        # Auto-Modus: Hailo probieren, bei jedem Fehler auf YOLO zurückfallen.
+        d = _try_hailo()
+        if d is not None:
+            _detector = d
+            _active_detector_name = "hailo"
+        else:
+            print("[visual] Auto-Modus: Hailo nicht verfügbar, fallback auf YOLO.")
+            _detector = _try_yolo()
+            _active_detector_name = "yolo"
 
     print(f"[visual] {type(_detector).__name__} aktiv")
     return _detector
@@ -74,8 +111,14 @@ def _get_detector() -> DetectorProtocol:
 
 def set_detector(detector: DetectorProtocol | None) -> None:
     """Erlaubt Tests, einen eigenen Detector zu injizieren (oder zurückzusetzen)."""
-    global _detector
+    global _detector, _active_detector_name
     _detector = detector
+    _active_detector_name = type(detector).__name__.lower() if detector else "none"
+
+
+def active_detector() -> str:
+    """Gibt den Namen des aktiven Detectors zurück ('hailo' | 'yolo' | 'none' | ...)."""
+    return _active_detector_name
 
 
 def prewarm() -> None:
@@ -157,7 +200,14 @@ def start_tracking(name: str) -> dict:
 
 
 def _run_stream(detector: DetectorProtocol, name: str, stop_event: threading.Event) -> None:
-    """Worker: ruft detector.stream() bis stop_event gesetzt wird."""
+    """Worker: ruft detector.stream() bis stop_event gesetzt wird.
+
+    Hinweis: Wenn der Stream *zur Laufzeit* crasht (z.B. Hailo-Pipeline failed
+    erst beim Start), gibt es hier KEIN Auto-Fallback auf YOLO. Das ist
+    bewusst — ein Wechsel des aktiven Detectors mitten im Tracking wäre
+    fehleranfällig. Stattdessen sieht der Controller den nächsten /track/latest
+    mit found=False, und kann ggf. /track/stop + /track/start neu auslösen.
+    """
     try:
         detector.stream(name, _on_frame, stop_event)
     except Exception as e:
@@ -191,7 +241,8 @@ def _stop_locked() -> None:
     if _stop_event is not None:
         _stop_event.set()
     if _tracking_thread is not None:
-        _tracking_thread.join(timeout=2.0)
+        # 5s Timeout: GStreamer-Pipeline braucht u.U. etwas zum Aufräumen.
+        _tracking_thread.join(timeout=5.0)
     _tracking_thread = None
     _stop_event = None
     _current_name = None

@@ -8,7 +8,7 @@ Was der Test macht:
   4. Pollt N Sekunden lang und zeigt dir live, was rauskommt
 
 Aufruf:
-    python live_e2e_test.py                      # Default: smartphone, 30s
+    python live_e2e_test.py                      # Default: cell phone, 30s
     python live_e2e_test.py cup 60               # cup, 60 Sekunden
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ import server
 from visual_client import VisualClient
 
 
-PORT = int(os.environ.get("VISUAL_PORT", "8000"))
+PORT = int(os.environ.get("VISUAL_PORT", "7995"))
 BASE_URL = f"http://127.0.0.1:{PORT}"
 
 
@@ -64,7 +64,8 @@ def run_live_e2e(target: str, duration: float) -> None:
     print("[2/4] Auf Server-Health warten (lädt YOLO-Modell, kann 10-30s dauern)...")
     client = VisualClient(base_url=BASE_URL, timeout=10.0)
     wait_for_server(client, timeout=60.0)
-    print("      ✓ Server antwortet")
+    info = client.health_info() or {}
+    print(f"      ✓ Server antwortet, Detector: {info.get('detector', '?')}")
 
     input(f"\n[3/4] Halte ein '{target}' bereit. ⏎ Enter zum Tracking-Start...")
 

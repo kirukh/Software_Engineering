@@ -6,7 +6,7 @@ Beispiel:
     from visual_client import VisualClient
 
     with VisualClient() as visual:
-        visual.start("smartphone")
+        visual.start("cell phone")
         while controller_running:
             r = visual.latest()
             if r["status"] == "running" and r["found"]:
@@ -21,7 +21,7 @@ import httpx
 
 
 class VisualClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:8000", timeout: float = 5.0):
+    def __init__(self, base_url: str = "http://127.0.0.1:7995", timeout: float = 5.0):
         # Eigene HTTP-Session: hält Verbindung offen, schneller als jedes Mal neu.
         self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout)
 
@@ -38,7 +38,7 @@ class VisualClient:
         - {"status": "idle"}                          → kein Tracking aktiv
         - {"status": "running", "found": False, ...}  → Tracking läuft, nichts erkannt
         - {"status": "running", "found": True, "x": 0.5, "y": 0.5,
-           "w": 0.2, "h": 0.3, "confidence": 0.87, "name": "smartphone"}
+           "w": 0.2, "h": 0.3, "confidence": 0.87, "name": "cell phone"}
         """
         r = self._client.get("/track/latest")
         r.raise_for_status()
@@ -56,6 +56,19 @@ class VisualClient:
             return self._client.get("/health").status_code == 200
         except httpx.HTTPError:
             return False
+
+    def health_info(self) -> dict | None:
+        """Detaillierter Health-Check inkl. aktivem Detector.
+
+        Gibt z.B. {"status": "ok", "detector": "yolo"} zurück, oder None bei Fehler.
+        Praktisch zum Debuggen ('läuft auf dem Pi tatsächlich Hailo?').
+        """
+        try:
+            r = self._client.get("/health")
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPError:
+            return None
 
     def close(self) -> None:
         self._client.close()
