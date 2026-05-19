@@ -6,7 +6,7 @@ FastAPI auf 127.0.0.1:7995 (Default). Endpoints:
     POST   /track/stop     Tracking beenden
     GET    /health         Server-Check (inkl. aktiver Detector)
 
-Konfiguration: siehe config.py (Defaults < config.yaml < Env-Variablen).
+Konfiguration: siehe config.py (Defaults < Env-Variablen).
 Aktive Werte anzeigen: `python config.py`.
 """
 from __future__ import annotations

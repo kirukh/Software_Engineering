@@ -45,7 +45,7 @@ Beim ersten YOLO-Start zieht `ultralytics` das `yolov8n.pt`-Modell von sich aus 
 python config.py
 ```
 
-Zeigt die aktiven Werte. Falls etwas nicht stimmt: über Env-Variablen (z.B. `VISUAL_PORT=7996 python server.py`) oder über eine `config.yaml` anpassen (siehe Abschnitt 7).
+Zeigt die aktiven Werte. Defaults sind so gewählt, dass auf dem Pi alles direkt funktioniert: Hailo wird automatisch versucht, bei jedem Fehler fällt der Server auf YOLO zurück. Falls etwas geändert werden muss: entweder direkt in `config.py` editieren oder per Env-Variable überschreiben (Tabelle in Abschnitt 7).
 
 ## 2. Server starten
 
@@ -71,7 +71,7 @@ Damit ist der Server unter `http://<pi-ip>:7995` aus dem lokalen Netzwerk erreic
 
 | Befehl | Effekt |
 |---|---|
-| `python server.py` | Auto: Hailo, fallback auf YOLO |
+| `python server.py` | Auto: Hailo, fallback auf YOLO (Default) |
 | `VISUAL_DETECTOR=hailo python server.py` | Nur Hailo, fail wenn nicht verfügbar |
 | `VISUAL_DETECTOR=yolo python server.py` | Nur YOLO (Webcam, auch ohne Hailo-Kit) |
 
@@ -207,15 +207,13 @@ curl -X POST http://127.0.0.1:7995/track/stop
 | `found` wird nie `true` | (1) Falsches Label — `"smartphone"` statt `"cell phone"`. (2) Objekt nicht im Sichtfeld. (3) Konfidenz zu niedrig — `confidence_min` in der Config runtersetzen |
 | `/health` antwortet `detector: yolo` obwohl Hailo da sein soll | Hailo-Init schlug fehl, Fallback griff. Logs im Server-Terminal checken |
 | Erster `/track/start` braucht 10–30s | Normal: YOLO lädt das Modell. Mit Prewarm im Server-Start schon erledigt, sollte beim zweiten Mal schnell sein |
-| `ModuleNotFoundError: vision_interface` | Datei wurde in `visual_interface.py` umbenannt — zurück auf `vision_interface.py` |
 
 ## 7. Konfiguration
 
-Alle Tuning-Parameter liegen in `config.py`. Drei Ebenen (späteres überschreibt früheres):
+Alle Tuning-Parameter liegen in `config.py`. Zwei Ebenen (späteres überschreibt früheres):
 
-1. **Defaults** im Code
-2. **`config.yaml`** im Repo-Root (optional)
-3. **Env-Variablen**
+1. **Defaults** im Code (`config.py`)
+2. **Env-Variablen** (zum kurzfristigen Überschreiben)
 
 ### Alle Felder
 
@@ -231,19 +229,21 @@ Alle Tuning-Parameter liegen in `config.py`. Drei Ebenen (späteres überschreib
 | `model_path` | `yolov8n.pt` | `VISION_MODEL_PATH` | Pfad |
 | `stop_timeout_seconds` | `5.0` | `VISION_STOP_TIMEOUT_SECONDS` | > 0 |
 
-### `config.yaml` verwenden
+### Werte ändern
+
+**Dauerhaft:** direkt in `config.py` editieren — die Defaults der `VisualConfig`-Dataclass anpassen.
+
+**Für einen einzelnen Lauf** (z.B. zum Debuggen): Env-Variable setzen.
 
 ```bash
-cp config.yaml.example config.yaml
-pip install pyyaml
-nano config.yaml         # eigene Werte eintragen
-python config.py         # checken dass die Werte angenommen wurden
-python server.py
+VISUAL_PORT=7996 python server.py        # ein einzelner Lauf auf anderem Port
+VISUAL_DETECTOR=yolo python server.py    # erzwingt YOLO
+VISION_CONFIDENCE_MIN=0.4 python server.py   # Schwelle runter
 ```
 
-Env-Variablen überschreiben `config.yaml` — praktisch fürs Debuggen:
+Aktive Werte checken:
 ```bash
-VISUAL_PORT=7996 python server.py   # ein einzelner Lauf auf anderem Port
+python config.py
 ```
 
 ## 8. Lokal testen (ohne Pi)
@@ -258,6 +258,7 @@ Dann gegen `http://127.0.0.1:7995` arbeiten. COCO-Label `"person"` ist am zuverl
 
 ## 9. Bekannte offene Punkte
 
+- **Hailo-Live-Test auf dem Pi** wird in der laufenden Sprint-Session abgeschlossen (T-20). Der Auto-Fallback auf YOLO ist eingebaut, falls dabei etwas hakt.
 - **Video-Stream-Endpoint** (`GET /stream` o.ä.) ist für Sprint 4 angedacht, noch nicht implementiert.
 - **Team-übergreifende Config-Datei** (alle Modul-Ports an einer Stelle): in Diskussion. Aktuell nur Visual.
 

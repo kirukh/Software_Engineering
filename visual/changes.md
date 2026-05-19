@@ -34,6 +34,7 @@ The detection model also changed: instead of one-shot `search()` calls, the serv
 - **Sliding window** of the last 8 frames smooths the output (default: 5 of 8 frames must match for `found=true`)
 - **Auto Hailo→YOLO fallback** — when `VISUAL_DETECTOR` is not set, the server tries Hailo first and falls back to YOLO on any error. `GET /health` returns `{"detector": "hailo"|"yolo"|"none"}` so you can verify which one's active.
 - **Configurable bind address** — `VISUAL_HOST` env variable, default `127.0.0.1`. Set to `0.0.0.0` for network access.
+- **Central config** (`config.py`) — all tuning parameters in one `VisualConfig` dataclass. Override per run via environment variables (see README for the full table).
 
 ## Behavioral changes
 
@@ -124,8 +125,7 @@ The "sustained fire" requirement for the laser came in after Sprint 1. The laser
 
 ## What's still open on our side
 
-- The Hailo path is code-complete but **not yet live-tested on the Pi** (Sprint 3 task T-20). We'll go through that together at the next joint Pi session.
-- A central config file (instead of env variables) is on the Sprint 4 backlog.
+- The Hailo path is code-complete but **not yet live-tested on the Pi** (Sprint 3 task T-20). We'll go through that together at the next joint Pi session. The auto-fallback to YOLO is in place so the rollout still works if anything goes wrong.
 - A video-stream endpoint (`GET /stream`) is in discussion for Sprint 4.
 
 ## Testing it locally without the Pi

@@ -3,8 +3,7 @@ config.py — Zentrale Konfiguration für das Visual-Modul.
 
 Auflösungsreihenfolge (späteres überschreibt früheres):
     1) Defaults aus dem Code (sicher, immer da)
-    2) config.yaml im Repo-Root, falls vorhanden und PyYAML installiert
-    3) Umgebungsvariablen (VISUAL_*, VISION_*)
+    2) Umgebungsvariablen (VISUAL_*, VISION_*)
 
 Aufruf:
     from config import CONFIG
@@ -12,12 +11,18 @@ Aufruf:
 
 Aktive Werte ausgeben (zum Debuggen):
     python config.py
+
+Defaults sind so gewählt, dass der Server auf dem Pi out-of-the-box läuft:
+- detector_mode = ""  → Auto: probiert Hailo, fällt bei jedem Fehler auf YOLO
+  zurück. Damit ist der Sprint-3-Rollout abgesichert, selbst wenn das
+  Hailo-Kit zur Laufzeit hakt.
+- port = 7995         → mittlere Position der Visual-Range 7991–8000
+  (Festlegung Prof. Jehle).
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, fields, asdict
-from pathlib import Path
+from dataclasses import dataclass, asdict
 from typing import Any
 
 
@@ -31,11 +36,14 @@ class VisualConfig:
     """
 
     # --- Server ---
-    host: str = "127.0.0.1"      # 0.0.0.0 für Netzwerk-Zugriff
+    host: str = "127.0.0.1"      # 0.0.0.0 für Netzwerk-Zugriff von anderen Geräten
     port: int = 7995             # in Range 7991–8000
 
     # --- Detector-Wahl ---
-    detector_mode: str = ""      # "" (auto), "hailo", "yolo"
+    # "" = Auto (Hailo bevorzugt, Fallback YOLO) — Default für Pi-Rollout.
+    # "hailo" = nur Hailo, kein Fallback (für Performance-Messungen).
+    # "yolo"  = nur YOLO + Webcam (Laptop-Tests).
+    detector_mode: str = ""
 
     # --- Detection-Parameter ---
     confidence_min: float = 0.5  # pro Frame
@@ -76,9 +84,10 @@ class VisualConfig:
             raise ValueError(f"stop_timeout_seconds={self.stop_timeout_seconds} muss > 0 sein")
 
 
-# ------------------------------------------------------------------ Quellen-Mapping
+# ------------------------------------------------------------------ Env-Mapping
 
-# Feldname → Env-Variable (Backwards-Kompatibilität mit bestehenden Env-Vars).
+# Feldname → Env-Variable. Praktisch zum kurzfristigen Überschreiben:
+#   VISUAL_PORT=7996 python server.py
 _ENV_MAP: dict[str, str] = {
     "host": "VISUAL_HOST",
     "port": "VISUAL_PORT",
@@ -105,52 +114,12 @@ def _coerce(value: Any, target_type: type) -> Any:
     return str(value)
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
-    """config.yaml lesen, wenn vorhanden und PyYAML da ist. Sonst {}."""
-    if not path.exists():
-        return {}
-    try:
-        import yaml  # type: ignore
-    except ImportError:
-        print(f"[config] {path.name} gefunden, aber PyYAML nicht installiert — wird ignoriert.")
-        return {}
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"[config] {path.name} konnte nicht gelesen werden: {e} — wird ignoriert.")
-        return {}
-    if not isinstance(data, dict):
-        print(f"[config] {path.name}: Top-Level muss ein Mapping sein, ist {type(data).__name__} — ignoriert.")
-        return {}
-    # Optional: unter 'visual:' verschachtelt, falls die Datei später team-übergreifend wird.
-    if "visual" in data and isinstance(data["visual"], dict):
-        return data["visual"]
-    return data
-
-
 # ------------------------------------------------------------------ Build
 
-def load_config(yaml_path: Path | None = None) -> VisualConfig:
-    """Config zusammenbauen: Defaults < YAML < Env."""
+def load_config() -> VisualConfig:
+    """Config zusammenbauen: Defaults < Env-Variablen."""
     cfg = VisualConfig()
-    field_types = {f.name: f.type for f in fields(cfg)}
 
-    # 1) YAML-Layer
-    yaml_file = yaml_path or (Path(__file__).parent / "config.yaml")
-    yaml_data = _load_yaml(yaml_file)
-    for name, value in yaml_data.items():
-        if name not in field_types:
-            print(f"[config] Unbekanntes Feld in {yaml_file.name}: {name!r} — ignoriert.")
-            continue
-        # type-string in echten Typ auflösen ist tricky; nutzen Default-Wert als Hinweis
-        default_val = getattr(cfg, name)
-        try:
-            setattr(cfg, name, _coerce(value, type(default_val)))
-        except (ValueError, TypeError) as e:
-            print(f"[config] YAML-Wert für {name}={value!r} ungültig: {e} — Default beibehalten.")
-
-    # 2) Env-Layer
     for name, env_var in _ENV_MAP.items():
         raw = os.environ.get(env_var)
         if raw is None:
@@ -159,7 +128,7 @@ def load_config(yaml_path: Path | None = None) -> VisualConfig:
         try:
             setattr(cfg, name, _coerce(raw, type(default_val)))
         except (ValueError, TypeError) as e:
-            print(f"[config] Env {env_var}={raw!r} ungültig: {e} — vorigen Wert beibehalten.")
+            print(f"[config] Env {env_var}={raw!r} ungültig: {e} — Default beibehalten.")
 
     # detector_mode normalisieren (lower, leerstring statt None)
     cfg.detector_mode = (cfg.detector_mode or "").strip().lower()

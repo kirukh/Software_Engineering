@@ -40,10 +40,9 @@ auf `null`.
 
 Alle Parameter liegen in `config.py` als `VisualConfig`-Dataclass.
 
-**Drei Ebenen, später hat Vorrang:**
-1. Defaults im Code
-2. `config.yaml` im Repo-Root (optional, braucht PyYAML)
-3. Umgebungsvariablen
+**Zwei Ebenen, später hat Vorrang:**
+1. Defaults im Code (`config.py`)
+2. Umgebungsvariablen (zum kurzfristigen Überschreiben)
 
 Aktive Werte anzeigen:
 ```bash
@@ -72,12 +71,10 @@ Aktive Visual-Konfiguration:
 | `model_path` | `yolov8n.pt` | `VISION_MODEL_PATH` | YOLO-Modell-Pfad |
 | `stop_timeout_seconds` | `5.0` | `VISION_STOP_TIMEOUT_SECONDS` | Wait beim Tracking-Stop |
 
-**`config.yaml` nutzen:**
+**Werte dauerhaft ändern:** direkt in `config.py` editieren.
+**Werte für einen einzelnen Lauf ändern:** Env-Variable vor dem Aufruf setzen, z.B.
 ```bash
-cp config.yaml.example config.yaml
-pip install pyyaml          # falls noch nicht da
-# edit config.yaml as desired
-python server.py
+VISUAL_PORT=7996 python server.py
 ```
 
 ## HTTP-API
@@ -117,7 +114,7 @@ hilfreich um zu sehen, ob im Auto-Modus der Fallback gegriffen hat.
 ## Server starten
 
 ```bash
-# Auto-Detector (Hailo wenn verfügbar, sonst YOLO)
+# Auto-Detector (Hailo wenn verfügbar, sonst YOLO) — Default
 python server.py
 
 # YOLO-Webcam erzwingen (Laptop ohne Hailo)
@@ -195,7 +192,7 @@ Optionen waren:
 | FR-04 | Ergebnis mit `name`, `found`, `confidence`, `x`, `y`, `w`, `h` zurückgeben |
 | FR-05 | Sliding-Window-Aggregation über N Frames für stabile Ausgabe |
 | FR-06 | Auto-Fallback Hailo → YOLO, damit Rollout auch ohne funktionierendes AI Kit läuft |
-| FR-07 | Zentrale Konfiguration (`config.py`) mit Env-Override und optional YAML |
+| FR-07 | Zentrale Konfiguration (`config.py`) mit Env-Override |
 | ITF-01 | HTTP-API: `POST /track/start`, `GET /track/latest`, `POST /track/stop` |
 | ITF-02 | JSON-Antworten, Pydantic-validiert |
 | ITF-03 | `GET /health` liefert aktiven Detector zurück (zum Debuggen) |

@@ -43,6 +43,10 @@ funktionieren.
 4. **`VISUAL_HOST` konfigurierbar** (Default `127.0.0.1`). Für Single-Pi-
    Rollout reicht der Default; wenn der Audio-Laptop später extern zugreifen
    soll, `VISUAL_HOST=0.0.0.0`.
+5. **Zentrale Konfiguration in `config.py`** — alle Tuning-Parameter in einer
+   `VisualConfig`-Dataclass, überschreibbar per Env-Variable. Ersetzt die
+   verstreute Env-Var-Logik aus Sprint 1/2 und schafft eine klare Quelle
+   der Wahrheit, die bei `python config.py` sichtbar ist.
 
 ### User Stories
 
@@ -66,6 +70,7 @@ funktionieren.
 | T-17 | Hailo-Detector: robustes `_shutdown_pipeline()` mit Fallback-Pfaden | US-11 | 1 | ✅ Done |
 | T-18 | `Anleitung.md` für Controller-Team schreiben | US-12 | 1 | ✅ Done |
 | T-19 | `VISUAL_HOST` konfigurierbar (Default 127.0.0.1) | US-13 | 0.5 | ✅ Done |
+| T-22 | Zentrale `config.py` (VisualConfig + Env-Override) | US-09/10 | 1 | ✅ Done |
 | T-20 | Pi-Live-Session: Hailo-Stream zum Laufen bringen | US-11 | 3 | ⏳ Open |
 | T-21 | Joint-Test mit Audio + Controller-Team | US-13 | 2.5 | ⏳ Open |
 
@@ -90,6 +95,8 @@ funktionieren.
 
 - **Hailo-Live-Test auf dem Pi** noch nicht durchgeführt (T-20). Höchstes
   Risiko im Sprint. Geplante Joint-Session: tbd.
+  → Abgesichert durch Auto-Fallback auf YOLO: der Rollout selbst läuft
+  unabhängig davon ob Hailo zur Laufzeit funktioniert.
 - **`app.shutdown()` bei Hailo:** unsicher, ob das so existiert. Fallback
   über `pipeline.set_state(Gst.State.NULL)` ist eingebaut — muss am
   echten Hailo verifiziert werden.
